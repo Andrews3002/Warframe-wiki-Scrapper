@@ -1,73 +1,47 @@
 from bs4 import BeautifulSoup
 import requests
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
+import json
 
 baseurl = 'https://warframe.fandom.com'
+headers = {"User-Agent": "Mozilla/5.0"}
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-}
-
-#selenium code to perform http requests and access elements that need to wait for javascript scripts to finish running in order to have data.
+# Step 1: Get frame links with Selenium (for the dynamic list page)
 driver = webdriver.Chrome()
 driver.get('https://warframe.fandom.com/wiki/Warframes')
-sleep(1)
-website = driver.page_source
+sleep(2)  # wait for JS
+soup = BeautifulSoup(driver.page_source, 'lxml')
+driver.quit()  # close browser immediately
 
-#use this code to utilize selenium when scrapping a dynamic site that uses javascript to populate its data
-# website = requests.get('https://warframe.fandom.com/wiki/Warframes')
+frameLinks = [
+    baseurl + a['href']
+    for span in soup.find_all('span', class_='WarframeNavBoxText')
+    for a in span.find_all('a', href=True)
+]
 
-#use this code when scrapping a static site that has all its data directly stored in its html document
-soup = BeautifulSoup(website, 'lxml')
-
-warframeList = soup.find_all('span', class_='WarframeNavBoxText')
-
-frameLinks = []
+# Step 2: Visit each Warframe page with requests (static content)
 frameList = []
+for i, link in enumerate(frameLinks, start=1):
+    page = requests.get(link, headers=headers)
+    soup = BeautifulSoup(page.text, 'lxml')
 
-i = 0
-for warframe in warframeList:
-    for link in warframe.find_all('a', href=True):
-        frameLinks.append(baseurl + link['href'])
-    print(f'working for entry {i}')
-    i = i+1
+    # More robust name scraping
+    name_tag = soup.select_one("aside.pi-layout-default h2") \
+            or soup.select_one("aside.pi-layout-default h1") \
+            or soup.select_one("aside.pi-layout-default [data-source='Name']") \
+            or soup.find("h1")
+    name = name_tag.get_text(strip=True) if name_tag else "Unknown"
 
-i = 0
-for link in frameLinks:
-    #use this code to utilize selenium when scrapping a dynamic site that uses javascript to populate its data
-    driver.get(link)
-    page = driver.page_source
-    
-    #use this code when scrapping a static site that has all its data directly stored in its html document
-    # page = requests.get(link, headers=headers)
-    
-    soup = BeautifulSoup(page, 'lxml')
-    Sex = soup.find('div', {'data-source': 'Sex'}).div.text.strip()
-    Name = soup.find('aside', class_='portable-infobox pi-background pi-border-color pi-theme-wikia pi-layout-default').h2.b.text.strip()
+    # Sex may be missing too, so add fallback
+    sex_div = soup.find("div", {"data-source": "Sex"})
+    sex = sex_div.div.get_text(strip=True) if sex_div and sex_div.div else "Unknown"
 
-    frame = {
-        'Name': Name,
-        'Sex': Sex
-    }   
-    
-    frameList.append(frame)
-    print(f'working for entry {i}')
-    i = i+1
+    frameList.append({"Name": name, "Sex": sex})
+    print(f"Scraped {i}/{len(frameLinks)}: {name}")
 
-print(frameList)
+# Step 3: Save to JSON
+with open("Warframes.json", "w", encoding="utf-8") as f:
+    json.dump(frameList, f, indent=2, ensure_ascii=False)
 
-print('')
-print('')
-
-import pandas as pd
-df = pd.DataFrame.from_dict(frameList)
-
-df.to_csv('Warframes.csv', index=False)
-
-print(df)
-
-driver.close()
+print("✅ Scraping complete! Data saved to Warframes.json")
